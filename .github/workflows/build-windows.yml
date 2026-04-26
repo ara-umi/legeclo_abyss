@@ -1,0 +1,50 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-windows:
+    name: Build abyss_bot.exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Validate Python syntax
+        run: uv run python -m compileall -q game_script
+
+      - name: Build one-file EXE
+        run: >
+          uv run pyinstaller
+          --noconfirm
+          --clean
+          --onefile
+          --console
+          --name abyss_bot
+          --add-data "templates;templates"
+          game_script\__main__.py
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: abyss_bot-windows
+          path: dist/abyss_bot.exe
+          if-no-files-found: error
+
