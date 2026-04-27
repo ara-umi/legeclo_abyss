@@ -20,7 +20,7 @@ def read_bot_options() -> BotOptions:
     return BotOptions(
         reset_cycle_count=read_positive_int("请输入循环次数", DEFAULT_RESET_CYCLE_COUNT),
         boss_battle_target_count=read_positive_int(
-            "请输入每次循环遭遇 BOSS 次数",
+            "请输入每次循环遭遇 BOSS 次数（5 关 1 BOSS）",
             DEFAULT_BOSS_BATTLE_TARGET_COUNT,
         ),
     )
