@@ -18,23 +18,46 @@ from game_script.vision import (
 )
 
 
-ABYSS_MAIN_TEMPLATE = Path("templates/深渊主界面.png")
-START_BATTLE_TEMPLATE = Path("templates/编队&出击.png")
-SORTIE_TEMPLATE = Path("templates/出击.png")
-NORMAL_TEMPLATE = Path("templates/NORMAL.png")
+def app_base_dir() -> Path:
+    """返回程序运行目录。
+
+    源码运行时是项目根目录；PyInstaller 打包后是 exe 所在目录。
+    """
+
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
+
+
+def resource_path(relative_path: str) -> Path:
+    """返回资源文件路径，兼容源码运行和 PyInstaller onefile。
+
+    源码运行时，资源从项目根目录读取；PyInstaller onefile 运行时，资源会被
+    解压到 sys._MEIPASS，必须从那里读取。
+    """
+
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / relative_path
+    return app_base_dir() / relative_path
+
+
+ABYSS_MAIN_TEMPLATE = resource_path("templates/深渊主界面.png")
+START_BATTLE_TEMPLATE = resource_path("templates/编队&出击.png")
+SORTIE_TEMPLATE = resource_path("templates/出击.png")
+NORMAL_TEMPLATE = resource_path("templates/NORMAL.png")
 BOSS_TEMPLATES = {
-    "BOSS1": Path("templates/BOSS1.png"),
-    "BOSS2": Path("templates/BOSS2.png"),
+    "BOSS1": resource_path("templates/BOSS1.png"),
+    "BOSS2": resource_path("templates/BOSS2.png"),
 }
-BUFF_INFO_TEMPLATE = Path("templates/获得强化效果+简单编成情报.png")
-BATTLE_TEMPLATE = Path("templates/战斗.png")
-AUTO_ON_TEMPLATE = Path("templates/自动开.png")
-AUTO_OFF_TEMPLATE = Path("templates/自动关.png")
-NEXT_TEMPLATE = Path("templates/NEXT.png")
-LEVEL_SELECT_TEMPLATE = Path("templates/关卡选择.png")
-OK_TEMPLATE = Path("templates/OK.png")
-RESET_TEMPLATE = Path("templates/重置.png")
-GIVE_UP_TEMPLATE = Path("templates/放弃.png")
+BUFF_INFO_TEMPLATE = resource_path("templates/获得强化效果+简单编成情报.png")
+BATTLE_TEMPLATE = resource_path("templates/战斗.png")
+AUTO_ON_TEMPLATE = resource_path("templates/自动开.png")
+AUTO_OFF_TEMPLATE = resource_path("templates/自动关.png")
+NEXT_TEMPLATE = resource_path("templates/NEXT.png")
+LEVEL_SELECT_TEMPLATE = resource_path("templates/关卡选择.png")
+OK_TEMPLATE = resource_path("templates/OK.png")
+RESET_TEMPLATE = resource_path("templates/重置.png")
+GIVE_UP_TEMPLATE = resource_path("templates/放弃.png")
 
 DEFAULT_RESET_CYCLE_COUNT = 99
 DEFAULT_BOSS_BATTLE_TARGET_COUNT = 2
@@ -52,14 +75,38 @@ entered_boss2_battle = False
 
 
 def configure_logging() -> None:
-    """配置 loguru 日志格式，保证控制台日志带清晰时间。"""
+    """配置 loguru 日志格式，同时写控制台和本地日志文件。"""
 
+    log_dir = app_base_dir() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "abyss_bot.log"
     logger.remove()
     logger.add(
         sys.stderr,
         level="INFO",
         format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<7} | {message}",
     )
+    logger.add(
+        log_file,
+        level="INFO",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<7} | {message}",
+        encoding="utf-8",
+        rotation="5 MB",
+        retention=10,
+    )
+    logger.info(f"日志文件：{log_file}")
+
+
+def pause_before_exit_if_frozen() -> None:
+    """exe 模式下退出前等待回车，避免双击启动的终端窗口自动关闭。"""
+
+    if not getattr(sys, "frozen", False):
+        return
+
+    try:
+        input("\n脚本已结束，按 Enter 关闭窗口...")
+    except EOFError:
+        pass
 
 
 def read_positive_int(prompt: str, default: int) -> int:
@@ -572,4 +619,14 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    exit_code = 1
+    try:
+        exit_code = main()
+    except KeyboardInterrupt:
+        logger.warning("用户中断脚本")
+    except Exception:
+        logger.exception("脚本发生未处理异常")
+    finally:
+        pause_before_exit_if_frozen()
+
+    raise SystemExit(exit_code)

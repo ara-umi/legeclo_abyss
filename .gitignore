@@ -1,5 +1,53 @@
+# Python bytecode/cache
 __pycache__/
 *.py[cod]
+*$py.class
+
+# Virtual environments
 .venv/
+venv/
+env/
+ENV/
+
+# uv / packaging local artifacts
+.python-version
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec
+
+# PyInstaller temporary files
+*.manifest
+*.toc
+
+# Test / coverage / type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE/editor files
 .idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Runtime logs and local debug captures
+logs/
+*.log
+screenshots/
+debug/
+tmp/
+temp/
+
+# Keep game templates tracked: they are required for the bundled exe.
+!templates/
+!templates/**
 
