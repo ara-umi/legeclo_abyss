@@ -1,15 +1,40 @@
 from __future__ import annotations
 
+import ctypes
+import sys
+from ctypes import wintypes
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from time import monotonic, sleep
 from typing import Iterable
 
+
+def _enable_dpi_awareness() -> None:
+    if sys.platform != "win32":
+        return
+
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except OSError:
+        return
+    except Exception:
+        pass
+
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
+_enable_dpi_awareness()
+
 import cv2
 import mss
 import numpy as np
 import pyautogui
+from loguru import logger
 
 
 SUPPORTED_TEMPLATE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
@@ -51,12 +76,12 @@ class ScaledTemplateMatch:
 def capture_screen(region: dict[str, int] | None = None) -> np.ndarray:
     """截取屏幕并返回 OpenCV 使用的 BGR 图像。
 
-    region 为空时截取主显示器；不为空时只截取指定区域。
+    region 为空时截取整个虚拟桌面；不为空时只截取指定区域。
     region 格式示例：{"left": 0, "top": 0, "width": 800, "height": 600}
     """
 
-    with mss.mss() as screenshot_tool:
-        monitor = region or screenshot_tool.monitors[1]
+    with mss.MSS() as screenshot_tool:
+        monitor = region or screenshot_tool.monitors[0]
         screenshot = screenshot_tool.grab(monitor)
 
     # mss 返回 BGRA，OpenCV 模板匹配通常使用 BGR 或灰度图，这里先去掉 alpha 通道。
@@ -188,6 +213,122 @@ def find_scaled_template(
     if best_match is None or best_match.score < threshold:
         return None
     return best_match
+
+
+def find_scaled_template_coarse_to_fine(
+    template: str | Path | np.ndarray,
+    *,
+    threshold: float = 0.85,
+    screen_image: np.ndarray | None = None,
+    region: dict[str, int] | None = None,
+    min_scale: float = 0.5,
+    max_scale: float = 2.0,
+    coarse_scale_step: float = 0.1,
+    fine_scale_step: float = 0.01,
+    fine_scale_window: float | None = None,
+    coarse_downsample: float = 1.0,
+) -> ScaledTemplateMatch | None:
+    """Find a scaled template by coarse search, then progressively approach it.
+
+    Example with the defaults: scan 0.5..4.0 by 0.1, then search around the
+    best scale by 0.02, then by 0.01. That keeps final click offsets accurate
+    without doing hundreds of full-screen matches up front.
+    """
+
+    if coarse_scale_step <= 0:
+        raise ValueError("coarse_scale_step 必须大于 0")
+    if fine_scale_step <= 0:
+        raise ValueError("fine_scale_step 必须大于 0")
+    if coarse_scale_step < fine_scale_step:
+        raise ValueError("coarse_scale_step 不能小于 fine_scale_step")
+    if fine_scale_window is not None and fine_scale_window < 0:
+        raise ValueError("fine_scale_window 不能小于 0")
+    if not 0 < coarse_downsample <= 1:
+        raise ValueError("coarse_downsample 必须在 0 到 1 之间")
+
+    captured_screen = screen_image if screen_image is not None else capture_screen(region)
+    coarse_template = template
+    coarse_screen = captured_screen
+    logger.info(
+        "分辨率匹配：开始粗扫，"
+        f"范围={min_scale:.2f}-{max_scale:.2f}，步长={coarse_scale_step:.3f}，"
+        f"截图尺寸={captured_screen.shape[1]}x{captured_screen.shape[0]}，"
+        f"粗扫降采样={coarse_downsample:.2f}"
+    )
+    if coarse_downsample < 1:
+        template_bgr, _ = _load_template_image(template)
+        coarse_template = scale_image(template_bgr, coarse_downsample)
+        coarse_screen = scale_image(captured_screen, coarse_downsample)
+        logger.info(
+            "分辨率匹配：粗扫使用降采样截图，"
+            f"尺寸={coarse_screen.shape[1]}x{coarse_screen.shape[0]}"
+        )
+
+    best_match = find_scaled_template(
+        coarse_template,
+        threshold=0,
+        screen_image=coarse_screen,
+        region=region,
+        min_scale=min_scale,
+        max_scale=max_scale,
+        scale_step=coarse_scale_step,
+    )
+    if best_match is None:
+        logger.info("分辨率匹配：粗扫没有找到候选")
+        return None
+    logger.info(f"分辨率匹配：粗扫候选，{_format_scaled_match(best_match)}")
+
+    search_radius = max(fine_scale_window or 0, coarse_scale_step)
+    scale_step = max(fine_scale_step, coarse_scale_step / 5)
+    round_index = 1
+    while True:
+        round_min_scale = max(min_scale, best_match.scale - search_radius)
+        round_max_scale = min(max_scale, best_match.scale + search_radius)
+        logger.info(
+            f"分辨率匹配：第 {round_index} 轮逼近，"
+            f"范围={round_min_scale:.3f}-{round_max_scale:.3f}，步长={scale_step:.3f}"
+        )
+        candidate = find_scaled_template(
+            template,
+            threshold=0,
+            screen_image=captured_screen,
+            region=region,
+            min_scale=round_min_scale,
+            max_scale=round_max_scale,
+            scale_step=scale_step,
+        )
+        if candidate is None:
+            logger.info(f"分辨率匹配：第 {round_index} 轮逼近没有找到候选")
+        else:
+            logger.info(f"分辨率匹配：第 {round_index} 轮候选，{_format_scaled_match(candidate)}")
+        if candidate is not None and candidate.score >= best_match.score:
+            best_match = candidate
+            logger.info(f"分辨率匹配：第 {round_index} 轮更新最佳候选")
+
+        if scale_step <= fine_scale_step:
+            break
+
+        search_radius = scale_step
+        scale_step = max(fine_scale_step, scale_step / 5)
+        round_index += 1
+
+    if best_match.score < threshold:
+        logger.info(
+            "分辨率匹配：最佳候选低于阈值，"
+            f"阈值={threshold:.4f}，{_format_scaled_match(best_match)}"
+        )
+        return None
+    logger.info(f"分辨率匹配：最终结果，{_format_scaled_match(best_match)}")
+    return best_match
+
+
+def _format_scaled_match(match: ScaledTemplateMatch) -> str:
+    return (
+        f"scale={match.scale:.4f}，score={match.score:.4f}，"
+        f"top_left=({match.top_left.x}, {match.top_left.y})，"
+        f"bottom_right=({match.bottom_right.x}, {match.bottom_right.y})，"
+        f"matched_size={match.matched_size[0]}x{match.matched_size[1]}"
+    )
 
 
 def find_first_template_center(
@@ -376,9 +517,61 @@ def click_window_offset(
     """
 
     point = resolve_window_offset_point(window_match, offset_x, offset_y)
-    pyautogui.moveTo(point.x, point.y, duration=duration)
-    pyautogui.click(point.x, point.y)
+    click_screen_point(point.x, point.y, duration=duration)
     return point
+
+
+def click_screen_point(x: int | float, y: int | float, *, duration: float = 0.15) -> Point:
+    """Click a screen coordinate, including coordinates on secondary monitors."""
+
+    point = move_screen_point(x, y, duration=duration)
+    if sys.platform == "win32":
+        _send_current_position_click()
+        return point
+
+    pyautogui.click()
+    return point
+
+
+def move_screen_point(x: int | float, y: int | float, *, duration: float = 0.15) -> Point:
+    """Move to a screen coordinate, including coordinates on secondary monitors."""
+
+    point = Point(x=round(x), y=round(y))
+    if sys.platform == "win32":
+        ctypes.windll.user32.SetCursorPos(point.x, point.y)
+        if duration > 0:
+            sleep(duration)
+        return point
+
+    pyautogui.moveTo(point.x, point.y, duration=duration)
+    return point
+
+
+class _MouseInput(ctypes.Structure):
+    _fields_ = (
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+    )
+
+
+class _InputUnion(ctypes.Union):
+    _fields_ = (("mi", _MouseInput),)
+
+
+class _Input(ctypes.Structure):
+    _fields_ = (("type", wintypes.DWORD), ("union", _InputUnion))
+
+
+def _send_current_position_click() -> None:
+    inputs = (_Input * 2)(
+        _Input(type=0, union=_InputUnion(mi=_MouseInput(0, 0, 0, 0x0002, 0, None))),
+        _Input(type=0, union=_InputUnion(mi=_MouseInput(0, 0, 0, 0x0004, 0, None))),
+    )
+    ctypes.windll.user32.SendInput(len(inputs), ctypes.byref(inputs), ctypes.sizeof(_Input))
 
 
 def _iter_template_paths(templates_dir: Path) -> Iterable[Path]:

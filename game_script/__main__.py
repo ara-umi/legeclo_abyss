@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from loguru import logger
 
-from game_script.main import main, pause_before_exit_if_frozen
+from game_script.main import main
+from game_script.runtime import pause_before_exit_if_frozen
 
 
 if __name__ == "__main__":
