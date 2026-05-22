@@ -14,7 +14,7 @@ from game_script.vision import (
 
 
 def click_match(match: TemplateMatch, *, click_delay_seconds: float = 0.5) -> None:
-    """Move to a template match center and click it after a short delay."""
+    """移动到模板匹配中心点，短暂等待后点击。"""
 
     if click_delay_seconds < 0:
         raise ValueError("click_delay_seconds 不能小于 0")
@@ -33,7 +33,7 @@ def wait_and_click_template(
     threshold: float = 0.8,
     click_delay_seconds: float = 0.5,
 ) -> TemplateMatch | None:
-    """Wait for a template to appear, then click its center."""
+    """等待模板出现，然后点击模板中心点。"""
 
     logger.info(f"正在等待{template_name}")
     match = _wait_template_center_safely(
@@ -63,7 +63,7 @@ def wait_template(
     timeout_seconds: float = 20,
     threshold: float = 0.8,
 ) -> TemplateMatch | None:
-    """Wait for a template to appear without clicking it."""
+    """等待模板出现，只返回匹配结果，不执行点击。"""
 
     logger.info(f"正在等待{template_name}")
     match = _wait_template_center_safely(

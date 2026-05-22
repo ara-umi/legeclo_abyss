@@ -228,11 +228,10 @@ def find_scaled_template_coarse_to_fine(
     fine_scale_window: float | None = None,
     coarse_downsample: float = 1.0,
 ) -> ScaledTemplateMatch | None:
-    """Find a scaled template by coarse search, then progressively approach it.
+    """先粗略搜索缩放模板，再逐步缩小范围逼近最佳结果。
 
-    Example with the defaults: scan 0.5..4.0 by 0.1, then search around the
-    best scale by 0.02, then by 0.01. That keeps final click offsets accurate
-    without doing hundreds of full-screen matches up front.
+    默认参数下，会先按 0.1 的步长扫描缩放比例，再围绕最佳比例按更小步长
+    继续搜索。这样能保证最终点击偏移足够准确，也避免一开始就做大量全屏匹配。
     """
 
     if coarse_scale_step <= 0:
@@ -522,7 +521,7 @@ def click_window_offset(
 
 
 def click_screen_point(x: int | float, y: int | float, *, duration: float = 0.15) -> Point:
-    """Click a screen coordinate, including coordinates on secondary monitors."""
+    """点击屏幕坐标，兼容副屏上的坐标。"""
 
     point = move_screen_point(x, y, duration=duration)
     if sys.platform == "win32":
@@ -534,7 +533,7 @@ def click_screen_point(x: int | float, y: int | float, *, duration: float = 0.15
 
 
 def move_screen_point(x: int | float, y: int | float, *, duration: float = 0.15) -> Point:
-    """Move to a screen coordinate, including coordinates on secondary monitors."""
+    """移动到屏幕坐标，兼容副屏上的坐标。"""
 
     point = Point(x=round(x), y=round(y))
     if sys.platform == "win32":

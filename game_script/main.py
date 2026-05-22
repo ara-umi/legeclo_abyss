@@ -6,10 +6,12 @@ from game_script.abyss_runner import AbyssRunner, match_resolution
 from game_script.runtime import (
     configure_logging,
     pause_before_exit_if_frozen,
+    read_int_in_range,
     read_positive_int,
 )
 from game_script.settings import (
     DEFAULT_BOSS_BATTLE_TARGET_COUNT,
+    DEFAULT_CHALLENGE_DIFFICULTY,
     DEFAULT_RESET_CYCLE_COUNT,
     INTRO_TEXT,
     BotOptions,
@@ -23,11 +25,17 @@ def read_bot_options() -> BotOptions:
             "请输入每次循环遭遇 BOSS 次数（5 关 1 BOSS）",
             DEFAULT_BOSS_BATTLE_TARGET_COUNT,
         ),
+        challenge_difficulty=read_int_in_range(
+            "请选择 BUFF 等级（即打第几个门）：0：随机 1：R 2：SR 3：SSR",
+            DEFAULT_CHALLENGE_DIFFICULTY,
+            min_value=0,
+            max_value=3,
+        ),
     )
 
 
 def main() -> int:
-    """Main entry: read options, match the game window, and run reset cycles."""
+    """主入口：读取运行参数、匹配游戏窗口，并执行深渊重置循环。"""
 
     print(INTRO_TEXT)
     configure_logging()
@@ -37,12 +45,13 @@ def main() -> int:
     if window_match is None:
         return 1
 
-    runner = AbyssRunner(window_match)
+    runner = AbyssRunner(window_match, challenge_difficulty=options.challenge_difficulty)
     for reset_cycle_index in range(1, options.reset_cycle_count + 1):
         runner.reset_cycle_state()
         logger.info(
             f"开始第 {reset_cycle_index}/{options.reset_cycle_count} 次循环，"
-            f"目标 BOSS 次数：{options.boss_battle_target_count}"
+            f"目标 BOSS 次数：{options.boss_battle_target_count}，"
+            f"挑战难度参数：{options.challenge_difficulty}"
         )
 
         if not runner.prepare_one_reset_cycle():
