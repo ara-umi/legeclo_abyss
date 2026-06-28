@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -38,6 +39,11 @@ from loguru import logger
 
 
 SUPPORTED_TEMPLATE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+WINDOWS_CLICK_BACKEND_ENV = "ABYSS_CLICK_BACKEND"
+WINDOWS_CLICK_HOLD_MS_ENV = "ABYSS_CLICK_HOLD_MS"
+WINDOWS_CLICK_BACKENDS = {"send_input", "mouse_event", "pyautogui"}
+DEFAULT_WINDOWS_CLICK_BACKEND = "send_input"
+DEFAULT_WINDOWS_CLICK_HOLD_MS = 80
 
 
 @dataclass(frozen=True)
@@ -525,7 +531,7 @@ def click_screen_point(x: int | float, y: int | float, *, duration: float = 0.15
 
     point = move_screen_point(x, y, duration=duration)
     if sys.platform == "win32":
-        _send_current_position_click()
+        _click_current_position_windows()
         return point
 
     pyautogui.click()
@@ -565,12 +571,94 @@ class _Input(ctypes.Structure):
     _fields_ = (("type", wintypes.DWORD), ("union", _InputUnion))
 
 
-def _send_current_position_click() -> None:
-    inputs = (_Input * 2)(
-        _Input(type=0, union=_InputUnion(mi=_MouseInput(0, 0, 0, 0x0002, 0, None))),
-        _Input(type=0, union=_InputUnion(mi=_MouseInput(0, 0, 0, 0x0004, 0, None))),
+def _click_current_position_windows() -> None:
+    """按当前配置发送 Windows 鼠标点击。
+
+    少数电脑上会出现鼠标移动正确、系统也显示点击、但游戏不响应的情况。通常是
+    目标程序不接受某一种模拟点击方式，所以这里允许通过环境变量切换点击后端。
+    """
+
+    backend = _resolve_windows_click_backend()
+    hold_seconds = _resolve_windows_click_hold_seconds()
+    logger.info(f"Windows 点击方式：{backend}，按住时长：{hold_seconds * 1000:.0f}ms")
+
+    if backend == "mouse_event":
+        _send_current_position_click_by_mouse_event(hold_seconds=hold_seconds)
+        return
+    if backend == "pyautogui":
+        pyautogui.click()
+        return
+
+    _send_current_position_click_by_send_input(hold_seconds=hold_seconds)
+
+
+def _resolve_windows_click_backend() -> str:
+    """读取 Windows 点击后端配置，配置错误时回退到默认方式。"""
+
+    backend = os.getenv(WINDOWS_CLICK_BACKEND_ENV, DEFAULT_WINDOWS_CLICK_BACKEND).strip().lower()
+    if backend in WINDOWS_CLICK_BACKENDS:
+        return backend
+
+    logger.warning(
+        f"{WINDOWS_CLICK_BACKEND_ENV}={backend!r} 无效，"
+        f"可选值：{', '.join(sorted(WINDOWS_CLICK_BACKENDS))}，已使用默认值 {DEFAULT_WINDOWS_CLICK_BACKEND}"
     )
-    ctypes.windll.user32.SendInput(len(inputs), ctypes.byref(inputs), ctypes.sizeof(_Input))
+    return DEFAULT_WINDOWS_CLICK_BACKEND
+
+
+def _resolve_windows_click_hold_seconds() -> float:
+    """读取鼠标按下到抬起之间的间隔，避免按下/抬起太快导致游戏漏掉点击。"""
+
+    raw_value = os.getenv(WINDOWS_CLICK_HOLD_MS_ENV, str(DEFAULT_WINDOWS_CLICK_HOLD_MS)).strip()
+    try:
+        hold_ms = int(raw_value)
+    except ValueError:
+        logger.warning(f"{WINDOWS_CLICK_HOLD_MS_ENV}={raw_value!r} 不是整数，已使用默认值 {DEFAULT_WINDOWS_CLICK_HOLD_MS}")
+        hold_ms = DEFAULT_WINDOWS_CLICK_HOLD_MS
+
+    if hold_ms < 0:
+        logger.warning(f"{WINDOWS_CLICK_HOLD_MS_ENV} 不能小于 0，已使用默认值 {DEFAULT_WINDOWS_CLICK_HOLD_MS}")
+        hold_ms = DEFAULT_WINDOWS_CLICK_HOLD_MS
+
+    return hold_ms / 1000
+
+
+def _send_current_position_click_by_send_input(*, hold_seconds: float) -> None:
+    """使用 SendInput 发送点击，这是当前默认方式。"""
+
+    if not _send_mouse_input(0x0002):
+        return
+    if hold_seconds > 0:
+        sleep(hold_seconds)
+    _send_mouse_input(0x0004)
+
+
+def _send_mouse_input(mouse_flags: int) -> bool:
+    """发送单个 SendInput 鼠标事件，并在 Windows 拒绝时记录错误码。"""
+
+    input_event = _Input(
+        type=0,
+        union=_InputUnion(mi=_MouseInput(0, 0, 0, mouse_flags, 0, None)),
+    )
+    sent_count = ctypes.windll.user32.SendInput(1, ctypes.byref(input_event), ctypes.sizeof(_Input))
+    if sent_count == 1:
+        return True
+
+    error_code = ctypes.GetLastError()
+    logger.error(f"SendInput 发送鼠标事件失败，flags={mouse_flags:#x}，GetLastError={error_code}")
+    return False
+
+
+def _send_current_position_click_by_mouse_event(*, hold_seconds: float) -> None:
+    """使用旧版 mouse_event 发送点击。
+
+    这个 API 已经比较老，但部分游戏、模拟器或远程桌面环境反而更容易吃到它。
+    """
+
+    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+    if hold_seconds > 0:
+        sleep(hold_seconds)
+    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
 
 
 def _iter_template_paths(templates_dir: Path) -> Iterable[Path]:
